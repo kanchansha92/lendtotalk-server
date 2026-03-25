@@ -57,11 +57,11 @@ const { protect } = require('../middlewares/authMiddleware');
 
 // Public routes
 router.post('/register', register);
-router.post('/verify-otp', verifyOTP);
-router.post('/resend-otp', resendOTP);
+// router.post('/verify-otp', verifyOTP);
+// router.post('/resend-otp', resendOTP);
 router.post('/login', login);
-router.post('/verify-login', verifyLoginOTP);
-router.post('/resend-login-otp', resendLoginOTP);
+// router.post('/verify-login', verifyLoginOTP);
+// router.post('/resend-login-otp', resendLoginOTP);
 // router.post('/social-login', socialLogin);
 router.post('/google-login', googleLogin);
 router.post('/facebook-login', facebookLogin);

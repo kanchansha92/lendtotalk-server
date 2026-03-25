@@ -32,99 +32,40 @@ const hashOTP = async (otp) => {
 /* ======================================================
    REGISTER (SIGNUP)
 ====================================================== */
+/* ======================================================
+   REGISTER (SIGNUP)
+====================================================== */
 exports.register = async (req, res) => {
   try {
-    const { phone, countryCode = '+91' } = req.body;
-    if (!phone)
-      return res.status(400).json({ success: false, message: 'Phone required' });
+    const { username, password } = req.body;
 
-    const fullPhone = `${countryCode}${phone}`;
-    let user = await User.findOne({ phone: fullPhone });
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: 'Username and password are required' });
+    }
 
-    if (user && user.isVerified) {
+    // Check if user already exists
+    const existingUser = await User.findOne({ username });
+    if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: 'User already exists. Please login.',
+        message: 'Username already exists',
       });
     }
 
-    const otp = generateOTP();
-    const hashedOTP = await hashOTP(otp);
-
-    if (!user) {
-      user = new User({
-        phone: fullPhone,
-        countryCode,
-        authProvider: 'phone',
-      });
-    }
-
-    user.otp = hashedOTP;
-    user.otpPlain = otp; // only for dev/debug
-    user.otpExpiry = Date.now() + OTP_EXPIRY;
-    user.otpAttempts = 0;
-    user.otpResendCount = 0;
-    user.otpLastSentAt = Date.now();
-    user.isVerified = false;
-    user.registrationStep = 'otp_verification';
+    const user = new User({
+      username,
+      password,
+      authProvider: 'local',
+      isVerified: true, // Auto-verify for now
+      registrationStep: 'name_entry', // Next step: name entry
+      profileCompleted: false,
+    });
 
     await user.save();
-
-    await sendSMS({
-      to: fullPhone,
-      message: otpMessage(otp, 'verify'),
-    });
 
     res.status(201).json({
       success: true,
-      message: 'OTP sent successfully',
-      data: { userId: user._id, phone: fullPhone },
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-/* ======================================================
-   VERIFY SIGNUP OTP
-====================================================== */
-exports.verifyOTP = async (req, res) => {
-  try {
-    const { userId, otp } = req.body;
-    if (!userId || !otp)
-      return res.status(400).json({ success: false, message: 'Missing data' });
-
-    const user = await User.findById(userId);
-    if (!user)
-      return res.status(404).json({ success: false, message: 'User not found' });
-
-    if (user.otpExpiry < Date.now())
-      return res.status(400).json({ success: false, message: 'OTP expired' });
-
-    if (user.otpAttempts >= MAX_ATTEMPTS)
-      return res.status(403).json({
-        success: false,
-        message: 'Too many attempts. Please resend OTP.',
-      });
-
-    const isValid = await bcrypt.compare(otp, user.otp);
-    if (!isValid) {
-      user.otpAttempts += 1;
-      await user.save();
-      return res.status(400).json({ success: false, message: 'Invalid OTP' });
-    }
-
-    user.isVerified = true;
-    user.otp = undefined;
-    user.otpExpiry = undefined;
-    user.otpAttempts = 0;
-    user.registrationStep = 'name_entry';
-
-    await user.save();
-
-    res.json({
-      success: true,
-      message: 'Phone number verified',
+      message: 'User registered successfully',
       data: {
         token: generateToken(user._id),
         user,
@@ -136,47 +77,97 @@ exports.verifyOTP = async (req, res) => {
 };
 
 /* ======================================================
+   VERIFY SIGNUP OTP
+====================================================== */
+// exports.verifyOTP = async (req, res) => {
+//   try {
+//     const { userId, otp } = req.body;
+//     if (!userId || !otp)
+//       return res.status(400).json({ success: false, message: 'Missing data' });
+
+//     const user = await User.findById(userId);
+//     if (!user)
+//       return res.status(404).json({ success: false, message: 'User not found' });
+
+//     if (user.otpExpiry < Date.now())
+//       return res.status(400).json({ success: false, message: 'OTP expired' });
+
+//     if (user.otpAttempts >= MAX_ATTEMPTS)
+//       return res.status(403).json({
+//         success: false,
+//         message: 'Too many attempts. Please resend OTP.',
+//       });
+
+//     const isValid = await bcrypt.compare(otp, user.otp);
+//     if (!isValid) {
+//       user.otpAttempts += 1;
+//       await user.save();
+//       return res.status(400).json({ success: false, message: 'Invalid OTP' });
+//     }
+
+//     user.isVerified = true;
+//     user.otp = undefined;
+//     user.otpExpiry = undefined;
+//     user.otpAttempts = 0;
+//     user.registrationStep = 'name_entry';
+
+//     await user.save();
+
+//     res.json({
+//       success: true,
+//       message: 'Phone number verified',
+//       data: {
+//         token: generateToken(user._id),
+//         user,
+//       },
+//     });
+//   } catch (error) {
+//     res.status(500).json({ success: false, error: error.message });
+//   }
+// };
+
+/* ======================================================
    RESEND SIGNUP OTP
 ====================================================== */
-exports.resendOTP = async (req, res) => {
-  try {
-    const { userId } = req.body;
+// exports.resendOTP = async (req, res) => {
+//   try {
+//     const { userId } = req.body;
 
-    const user = await User.findById(userId);
-    if (!user)
-      return res.status(404).json({ success: false, message: 'User not found' });
+//     const user = await User.findById(userId);
+//     if (!user)
+//       return res.status(404).json({ success: false, message: 'User not found' });
 
-    if (user.isVerified)
-      return res.status(400).json({
-        success: false,
-        message: 'User already verified. Please login.',
-      });
+//     if (user.isVerified)
+//       return res.status(400).json({
+//         success: false,
+//         message: 'User already verified. Please login.',
+//       });
 
-    if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN)
-      return res.status(429).json({
-        success: false,
-        message: 'Please wait before requesting another OTP',
-      });
+//     if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN)
+//       return res.status(429).json({
+//         success: false,
+//         message: 'Please wait before requesting another OTP',
+//       });
 
-    const otp = generateOTP();
-    user.otp = await hashOTP(otp);
-    user.otpExpiry = Date.now() + OTP_EXPIRY;
-    user.otpAttempts = 0;
-    user.otpResendCount += 1;
-    user.otpLastSentAt = Date.now();
+//     const otp = generateOTP();
+//     user.otp = await hashOTP(otp);
+//     user.otpExpiry = Date.now() + OTP_EXPIRY;
+//     user.otpAttempts = 0;
+//     user.otpResendCount += 1;
+//     user.otpLastSentAt = Date.now();
 
-    await user.save();
+//     await user.save();
 
-    await sendSMS({
-      to: user.phone,
-      message: otpMessage(otp, 'resend'),
-    });
+//     await sendSMS({
+//       to: user.phone,
+//       message: otpMessage(otp, 'resend'),
+//     });
 
-    res.json({ success: true, message: 'OTP resent successfully' });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
+//     res.json({ success: true, message: 'OTP resent successfully' });
+//   } catch (error) {
+//     res.status(500).json({ success: false, error: error.message });
+//   }
+// };
 
 /* ======================================================
    LOGIN
@@ -184,71 +175,29 @@ exports.resendOTP = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    const { phone, countryCode = '+91' } = req.body;
-    const fullPhone = `${countryCode}${phone}`;
+    const { username, password } = req.body;
 
-    const user = await User.findOne({ phone: fullPhone });
-    if (!user || !user.isVerified)
-      return res.status(404).json({
-        success: false,
-        message: 'User not found or not verified',
-      });
-
-    if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN)
-      return res.status(429).json({
-        success: false,
-        message: 'Please wait before requesting OTP again',
-      });
-
-    const otp = generateOTP();
-    user.otpPlain = otp; // only for dev/debug
-    user.otp = await hashOTP(otp);
-    user.otpExpiry = Date.now() + OTP_EXPIRY;
-    user.otpAttempts = 0;
-    user.otpLastSentAt = Date.now();
-
-    await user.save();
-
-    await sendSMS({
-      to: fullPhone,
-      message: otpMessage(otp, 'login'),
-    });
-
-    res.json({
-      success: true,
-      message: 'Login OTP sent',
-      data: { userId: user._id },
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-/* ======================================================
-   VERIFY LOGIN OTP
-====================================================== */
-exports.verifyLoginOTP = async (req, res) => {
-  try {
-    const { userId, otp } = req.body;
-
-    const user = await User.findById(userId);
-    if (!user)
-      return res.status(404).json({ success: false, message: 'User not found' });
-
-    if (user.otpExpiry < Date.now())
-      return res.status(400).json({ success: false, message: 'OTP expired' });
-
-    const isValid = await bcrypt.compare(otp, user.otp);
-    if (!isValid) {
-      user.otpAttempts += 1;
-      await user.save();
-      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: 'Username and password are required' });
     }
 
-    user.otp = undefined;
-    user.otpExpiry = undefined;
-    user.lastLogin = Date.now();
+    const user = await User.findOne({ username }).select('+password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
 
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials',
+      });
+    }
+
+    user.lastLogin = Date.now();
     await user.save();
 
     res.json({
@@ -265,40 +214,80 @@ exports.verifyLoginOTP = async (req, res) => {
 };
 
 /* ======================================================
+   VERIFY LOGIN OTP
+====================================================== */
+// exports.verifyLoginOTP = async (req, res) => {
+//   try {
+//     const { userId, otp } = req.body;
+
+//     const user = await User.findById(userId);
+//     if (!user)
+//       return res.status(404).json({ success: false, message: 'User not found' });
+
+//     if (user.otpExpiry < Date.now())
+//       return res.status(400).json({ success: false, message: 'OTP expired' });
+
+//     const isValid = await bcrypt.compare(otp, user.otp);
+//     if (!isValid) {
+//       user.otpAttempts += 1;
+//       await user.save();
+//       return res.status(400).json({ success: false, message: 'Invalid OTP' });
+//     }
+
+//     user.otp = undefined;
+//     user.otpExpiry = undefined;
+//     user.lastLogin = Date.now();
+
+//     await user.save();
+
+//     res.json({
+//       success: true,
+//       message: 'Login successful',
+//       data: {
+//         token: generateToken(user._id),
+//         user,
+//       },
+//     });
+//   } catch (error) {
+//     res.status(500).json({ success: false, error: error.message });
+//   }
+// };
+
+/* ======================================================
    RESEND LOGIN OTP
 ====================================================== */
-exports.resendLoginOTP = async (req, res) => {
-  try {
-    const { userId } = req.body;
+// exports.resendLoginOTP = async (req, res) => {
+//   try {
+//     const { userId } = req.body;
 
-    const user = await User.findById(userId);
-    if (!user)
-      return res.status(404).json({ success: false, message: 'User not found' });
+//     const user = await User.findById(userId);
+//     if (!user)
+//       return res.status(404).json({ success: false, message: 'User not found' });
 
-    if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN)
-      return res.status(429).json({
-        success: false,
-        message: 'Please wait before requesting OTP again',
-      });
+//     if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN)
+//       return res.status(429).json({
+//         success: false,
+//         message: 'Please wait before requesting OTP again',
+//       });
 
-    const otp = generateOTP();
-    user.otp = await hashOTP(otp);
-    user.otpExpiry = Date.now() + OTP_EXPIRY;
-    user.otpAttempts = 0;
-    user.otpLastSentAt = Date.now();
+//     const otp = generateOTP();
+//     user.otp = await hashOTP(otp);
+//     user.otpExpiry = Date.now() + OTP_EXPIRY;
+//     user.otpAttempts = 0;
+//     user.otpLastSentAt = Date.now();
 
-    await user.save();
+//     await user.save();
 
-    await sendSMS({
-      to: user.phone,
-      message: otpMessage(otp, 'login'),
-    });
+//     await sendSMS({
+//       to: user.phone,
+//       message: otpMessage(otp, 'login'),
+//     });
 
-    res.json({ success: true, message: 'Login OTP resent' });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
+//     res.json({ success: true, message: 'Login OTP resent' });
+//   } catch (error) {
+//     res.status(500).json({ success: false, error: error.message });
+//   }
+// };
 
 exports.googleLogin = async (req, res) => {
   try {
@@ -392,7 +381,7 @@ exports.facebookLogin = async (req, res) => {
           message: `This email is already associated with ${user.authProvider} login.`,
         });
       }
-      
+
       // Update social ID if not present
       if (!user.socialId) user.socialId = facebookId;
     } else {

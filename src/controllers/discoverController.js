@@ -136,7 +136,7 @@ exports.getSuggestions = async (req, res) => {
     const limit = 10;
     const skip = (page - 1) * limit;
 
-    const users = await User.find({
+    const query = {
       _id: { $ne: currentUser._id },
       gender: currentUser.preferences.showMe === "everyone"
         ? { $in: ["male", "female"] }
@@ -149,11 +149,24 @@ exports.getSuggestions = async (req, res) => {
       isBlocked: false,
       profileCompleted: true,
       profilePicture: { $ne: "" },
-    })
+      city: currentUser.city, // Same city
+    };
+
+    // Filter by distance if user has location (within 40km)
+    if (currentUser.location && currentUser.location.coordinates &&
+      currentUser.location.coordinates[0] !== 0 && currentUser.location.coordinates[1] !== 0) {
+      query.location = {
+        $geoWithin: {
+          $centerSphere: [currentUser.location.coordinates, 40 / 6378.1],
+        },
+      };
+    }
+
+    const users = await User.find(query)
       .skip(skip)
       .limit(limit)
       .sort({ createdAt: -1 })
-      .select("name profilePicture city country createdAt isCurrentlyOnline lastActive subscription");
+      .select("name profilePicture city state country createdAt isCurrentlyOnline lastActive subscription");
 
     const userIds = users.map((u) => u._id);
     const statusMap = await getConnectionStatuses(currentUser._id, userIds);

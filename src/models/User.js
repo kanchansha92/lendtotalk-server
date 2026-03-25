@@ -1,9 +1,16 @@
 // models/User.js
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 
 const UserSchema = new mongoose.Schema(
   {
     // Basic Info
+    username: {
+      type: String,
+      unique: true,
+      trim: true,
+      sparse: true,
+    },
     name: {
       type: String,
       trim: true,
@@ -417,6 +424,18 @@ UserSchema.methods.getPublicProfile = function () {
 UserSchema.methods.updateLastActive = async function () {
   this.lastActive = Date.now();
   return await this.save();
+};
+
+// Password hashing pre-save hook
+UserSchema.pre('save', async function () {
+  if (!this.isModified('password')) return;
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+});
+
+// Method to compare password
+UserSchema.methods.matchPassword = async function (enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
 };
 
 module.exports = mongoose.model('User', UserSchema);
