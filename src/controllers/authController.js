@@ -16,10 +16,14 @@ const OTP_COOLDOWN = 60 * 1000;   // 60 seconds
 const MAX_ATTEMPTS = 5;
 
 /* ================= HELPERS ================= */
-const generateToken = (userId) =>
-  jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+const generateToken = (userId) => {
+  if (!process.env.JWT_SECRET) {
+    console.warn('JWT_SECRET is not defined in .env! Using fallback.');
+  }
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET || 'fallback_secret_123', {
     expiresIn: process.env.JWT_EXPIRE || '7d',
   });
+};
 
 const generateOTP = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
@@ -37,25 +41,26 @@ const hashOTP = async (otp) => {
 ====================================================== */
 exports.register = async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { phone, countryCode, password } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({ success: false, message: 'Username and password are required' });
+    if (!phone || !password) {
+      return res.status(400).json({ success: false, message: 'Phone number and password are required' });
     }
 
     // Check if user already exists
-    const existingUser = await User.findOne({ username });
+    const existingUser = await User.findOne({ phone, countryCode: countryCode || '+91' });
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: 'Username already exists',
+        message: 'An account with this phone number already exists',
       });
     }
 
     const user = new User({
-      username,
+      phone,
+      countryCode: countryCode || '+91',
       password,
-      authProvider: 'local',
+      authProvider: 'phone',
       isVerified: true, // Auto-verify for now
       registrationStep: 'name_entry', // Next step: name entry
       profileCompleted: false,
@@ -65,11 +70,42 @@ exports.register = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'User registered successfully',
+      message: 'Account created successfully',
       data: {
         token: generateToken(user._id),
         user,
       },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+
+/* ======================================================
+   CHECK PHONE FOR SIGNUP
+====================================================== */
+exports.checkPhone = async (req, res) => {
+  try {
+    const { phone, countryCode } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ success: false, message: 'Phone number is required' });
+    }
+
+    const existingUser = await User.findOne({ phone, countryCode: countryCode || '+91' });
+    if (existingUser) {
+      return res.status(200).json({
+        success: false,
+        exists: true,
+        message: 'An account with this phone number already exists',
+      });
+    }
+
+    res.json({
+      success: true,
+      exists: false,
+      message: 'Phone number is available',
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -175,21 +211,38 @@ exports.register = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { phone, password } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({ success: false, message: 'Username and password are required' });
+    if (!phone || !password) {
+      return res.status(400).json({ success: false, message: 'Phone number and password are required' });
     }
 
-    const user = await User.findOne({ username }).select('+password');
+    let user;
+    // Try finding user with the provided phone number as IS
+    user = await User.findOne({ phone }).select('+password');
+
+    // If not found and phone starts with +, try splitting it (for combined phone from frontend)
+    if (!user && phone.startsWith('+')) {
+      // Look for common country code lengths (2 to 4 chars)
+      const commonCodes = ['+91', '+1', '+44', '+971', '+61'];
+      for (const code of commonCodes) {
+        if (phone.startsWith(code)) {
+          const mobile = phone.slice(code.length);
+          user = await User.findOne({ phone: mobile, countryCode: code }).select('+password');
+          if (user) break;
+        }
+      }
+    }
+
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found',
+        message: 'No account found with this phone number',
       });
     }
 
-    const isMatch = await user.matchPassword(password);
+    console.log(`Login attempt for phone: ${phone}`);
+    const isMatch = user.password ? await user.matchPassword(password) : false;
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -209,9 +262,11 @@ exports.login = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error('CRITICAL LOGIN ERROR:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 };
+
 
 /* ======================================================
    VERIFY LOGIN OTP

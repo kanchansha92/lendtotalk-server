@@ -41,6 +41,7 @@ const express = require('express');
 const router = express.Router();
 const {
   register,
+  checkPhone,
   verifyOTP,
   resendOTP,
   login,
@@ -57,6 +58,7 @@ const { protect } = require('../middlewares/authMiddleware');
 
 // Public routes
 router.post('/register', register);
+router.post('/check-phone', checkPhone);
 // router.post('/verify-otp', verifyOTP);
 // router.post('/resend-otp', resendOTP);
 router.post('/login', login);
