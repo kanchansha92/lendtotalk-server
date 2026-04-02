@@ -145,17 +145,21 @@ exports.getConversations = async (req, res) => {
             .populate('lastMessage')
             .sort({ lastMessageAt: -1 });
 
+        let totalUnreadCount = 0;
         const formattedConversations = conversations.map((conv) => {
             const otherParticipant = conv.participants.find(
                 (p) => p._id.toString() !== userId.toString()
             );
+
+            const unread = conv.unreadCount.get(userId.toString()) || 0;
+            totalUnreadCount += unread;
 
             return {
                 _id: conv._id,
                 participant: otherParticipant,
                 lastMessage: conv.lastMessage,
                 lastMessageAt: conv.lastMessageAt,
-                unreadCount: conv.unreadCount.get(userId.toString()) || 0,
+                unreadCount: unread,
                 isMuted: conv.mutedBy.some(id => id.toString() === userId.toString()),
                 isArchived: conv.archivedBy.some(id => id.toString() === userId.toString()),
             };
@@ -164,6 +168,7 @@ exports.getConversations = async (req, res) => {
         res.json({
             success: true,
             conversations: formattedConversations,
+            totalUnreadCount,
         });
     } catch (error) {
         console.error('Get conversations error:', error);
@@ -343,7 +348,7 @@ exports.sendTextMessage = async (req, res) => {
 exports.sendImageMessage = async (req, res) => {
     try {
         const userId = req.user._id;
-        const { conversationId, replyTo } = req.body;
+        const { conversationId, replyTo, content } = req.body;
 
         if (!req.file) {
             return res.status(400).json({ success: false, message: 'No image file provided' });
@@ -406,6 +411,7 @@ exports.sendImageMessage = async (req, res) => {
             mimeType: req.file.mimetype,
             cloudinaryPublicId: uploadResult.public_id,
             replyTo: replyTo || null,
+            content: content || null,
         });
 
 

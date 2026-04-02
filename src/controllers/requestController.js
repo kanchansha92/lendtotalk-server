@@ -46,13 +46,13 @@ exports.sendRequest = async (req, res) => {
         ],
       });
       console.log("[LIMIT CHECK] connectionCount (pending+accepted):", connectionCount, "| limit: 5");
-      if (connectionCount >= 5) {
+      if (connectionCount >= 25) {
         console.log("[LIMIT CHECK] ❌ BLOCKED — limit reached");
         return res.status(403).json({
           success: false,
           connectionLimitReached: true,
           message:
-            "You have reached the 5 connection limit for free accounts. Upgrade to connect with more people.",
+            "You have reached the 25 connection limit for free accounts. Upgrade to connect with more people.",
         });
       }
       console.log("[LIMIT CHECK] ✅ ALLOWED — under limit");
