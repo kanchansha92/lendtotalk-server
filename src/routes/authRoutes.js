@@ -52,6 +52,8 @@ const {
   resendLoginOTP,
   googleLogin,
   facebookLogin,
+  forgotPassword,
+  resetPassword,
 } = require('../controllers/authController');
 const { protect } = require('../middlewares/authMiddleware');
 // const { protect } = require('../middleware/authMiddleware');
@@ -67,6 +69,8 @@ router.post('/login', login);
 // router.post('/social-login', socialLogin);
 router.post('/google-login', googleLogin);
 router.post('/facebook-login', facebookLogin);
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password', resetPassword);
 
 // Protected routes
 router.get('/me', protect, getMe);

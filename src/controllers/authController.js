@@ -512,3 +512,76 @@ exports.logout = async (req, res) => {
 
 
 
+/* ======================================================
+   FORGOT PASSWORD
+===================================================== */
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { phone, countryCode } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ success: false, message: 'Phone number is required' });
+    }
+
+    const user = await User.findOne({ phone, countryCode: countryCode || '+91' });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found with this phone number',
+      });
+    }
+
+    // Generate temporary reset token directly (SKIPPING OTP as requested)
+    const crypto = require('crypto');
+    const resetToken = crypto.randomBytes(20).toString('hex');
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpiry = Date.now() + 30 * 60 * 1000; // 30 mins
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'User verified. Please reset your password.',
+      data: { resetPasswordToken: resetToken },
+    });
+  } catch (error) {
+    console.error('Forgot Password Error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/* ======================================================
+   RESET PASSWORD
+===================================================== */
+exports.resetPassword = async (req, res) => {
+  try {
+    const { resetPasswordToken, newPassword } = req.body;
+
+    if (!resetPasswordToken || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Token and new password are required' });
+    }
+
+    const user = await User.findOne({
+      resetPasswordToken,
+      resetPasswordExpiry: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });
+    }
+
+    // Update password
+    user.password = newPassword; // Hashing is handled by pre-save hook in User model
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpiry = undefined;
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully. You can now login with your new password.',
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
