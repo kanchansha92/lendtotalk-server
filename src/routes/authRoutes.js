@@ -40,16 +40,14 @@
 const express = require('express');
 const router = express.Router();
 const {
-  register,
+  registerOTP,
   checkPhone,
   verifyOTP,
   resendOTP,
+  finalizeRegister,
   login,
-  verifyLoginOTP,
-  socialLogin,
   getMe,
   logout,
-  resendLoginOTP,
   googleLogin,
   facebookLogin,
   forgotPassword,
@@ -59,10 +57,11 @@ const { protect } = require('../middlewares/authMiddleware');
 // const { protect } = require('../middleware/authMiddleware');
 
 // Public routes
-router.post('/register', register);
 router.post('/check-phone', checkPhone);
-// router.post('/verify-otp', verifyOTP);
-// router.post('/resend-otp', resendOTP);
+router.post('/register-otp', registerOTP);
+router.post('/verify-otp', verifyOTP);
+router.post('/resend-otp', resendOTP);
+router.post('/finalize-register', finalizeRegister);
 router.post('/login', login);
 // router.post('/verify-login', verifyLoginOTP);
 // router.post('/resend-login-otp', resendLoginOTP);

@@ -12,7 +12,7 @@ const verifyFacebookToken = require('../utils/verifyFacebookToken');
 
 /* ================= CONSTANTS ================= */
 const OTP_EXPIRY = 10 * 60 * 1000; // 10 minutes
-const OTP_COOLDOWN = 60 * 1000;   // 60 seconds
+const OTP_COOLDOWN = 30 * 1000;   // 30 seconds
 const MAX_ATTEMPTS = 5;
 
 /* ================= HELPERS ================= */
@@ -34,71 +34,23 @@ const hashOTP = async (otp) => {
 };
 
 /* ======================================================
-   REGISTER (SIGNUP)
-====================================================== */
-/* ======================================================
-   REGISTER (SIGNUP)
-====================================================== */
-exports.register = async (req, res) => {
-  try {
-    const { phone, countryCode, password } = req.body;
-
-    if (!phone || !password) {
-      return res.status(400).json({ success: false, message: 'Phone number and password are required' });
-    }
-
-    // Check if user already exists
-    const existingUser = await User.findOne({ phone, countryCode: countryCode || '+91' });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'An account with this phone number already exists',
-      });
-    }
-
-    const user = new User({
-      phone,
-      countryCode: countryCode || '+91',
-      password,
-      authProvider: 'phone',
-      isVerified: true, // Auto-verify for now
-      registrationStep: 'name_entry', // Next step: name entry
-      profileCompleted: false,
-    });
-
-    await user.save();
-
-    res.status(201).json({
-      success: true,
-      message: 'Account created successfully',
-      data: {
-        token: generateToken(user._id),
-        user,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-};
-
-
-/* ======================================================
-   CHECK PHONE FOR SIGNUP
+   CHECK PHONE
 ====================================================== */
 exports.checkPhone = async (req, res) => {
   try {
     const { phone, countryCode } = req.body;
-
     if (!phone) {
       return res.status(400).json({ success: false, message: 'Phone number is required' });
     }
 
-    const existingUser = await User.findOne({ phone, countryCode: countryCode || '+91' });
-    if (existingUser) {
-      return res.status(200).json({
-        success: false,
+    const fullCountryCode = countryCode || '+91';
+    const user = await User.findOne({ phone, countryCode: fullCountryCode });
+
+    if (user && user.isVerified) {
+      return res.json({
+        success: true,
         exists: true,
-        message: 'An account with this phone number already exists',
+        message: 'Phone number is already registered',
       });
     }
 
@@ -113,102 +65,238 @@ exports.checkPhone = async (req, res) => {
 };
 
 /* ======================================================
-   VERIFY SIGNUP OTP
+   REGISTER OTP (STEP 1)
 ====================================================== */
-// exports.verifyOTP = async (req, res) => {
-//   try {
-//     const { userId, otp } = req.body;
-//     if (!userId || !otp)
-//       return res.status(400).json({ success: false, message: 'Missing data' });
+exports.registerOTP = async (req, res) => {
+  try {
+    const { phone, countryCode } = req.body;
 
-//     const user = await User.findById(userId);
-//     if (!user)
-//       return res.status(404).json({ success: false, message: 'User not found' });
+    if (!phone) {
+      return res.status(400).json({ success: false, message: 'Phone number is required' });
+    }
 
-//     if (user.otpExpiry < Date.now())
-//       return res.status(400).json({ success: false, message: 'OTP expired' });
+    const fullCountryCode = countryCode || '+91';
 
-//     if (user.otpAttempts >= MAX_ATTEMPTS)
-//       return res.status(403).json({
-//         success: false,
-//         message: 'Too many attempts. Please resend OTP.',
-//       });
+    // Check if user already exists
+    const existingUser = await User.findOne({ phone, countryCode: fullCountryCode });
+    if (existingUser && existingUser.isVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'An account with this phone number already exists',
+      });
+    }
 
-//     const isValid = await bcrypt.compare(otp, user.otp);
-//     if (!isValid) {
-//       user.otpAttempts += 1;
-//       await user.save();
-//       return res.status(400).json({ success: false, message: 'Invalid OTP' });
-//     }
+    let user = existingUser;
+    if (!user) {
+      user = new User({
+        phone,
+        countryCode: fullCountryCode,
+        authProvider: 'phone',
+        registrationStep: 'otp_verification',
+      });
+    }
 
-//     user.isVerified = true;
-//     user.otp = undefined;
-//     user.otpExpiry = undefined;
-//     user.otpAttempts = 0;
-//     user.registrationStep = 'name_entry';
+    // Security: Cooldown check
+    if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN) {
+      return res.status(429).json({
+        success: false,
+        message: 'Please wait before requesting another OTP',
+      });
+    }
 
-//     await user.save();
+    const otp = generateOTP();
+    user.otp = await hashOTP(otp);
+    user.otpPlain = otp; // Added for debugging per user request
+    user.otpExpiry = Date.now() + OTP_EXPIRY;
+    user.otpAttempts = 0;
+    user.otpLastSentAt = Date.now();
 
-//     res.json({
-//       success: true,
-//       message: 'Phone number verified',
-//       data: {
-//         token: generateToken(user._id),
-//         user,
-//       },
-//     });
-//   } catch (error) {
-//     res.status(500).json({ success: false, error: error.message });
-//   }
-// };
+    console.log(`[DEBUG] Register OTP generated for user ${user._id}: ${otp}`);
+    await user.save();
+    console.log(`[DEBUG] User saved after register OTP.`);
+
+    // Send SMS
+    try {
+      await sendSMS({
+        to: `${fullCountryCode}${phone}`,
+        message: otpMessage(otp, 'signup'),
+      });
+    } catch (smsError) {
+      console.error('SMS Send Error:', smsError);
+      if (process.env.NODE_ENV === 'development' || !process.env.SMS_API_KEY) {
+        // Fallback for development if SMS fails
+        return res.json({
+          success: true,
+          message: 'OTP generated (Dev Mode)',
+          data: { userId: user._id, otp }
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'OTP sent successfully',
+      data: {
+        userId: user._id,
+        otp: otp // Included for testing per user request. REMOVE IN PRODUCTION.
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
 
 /* ======================================================
-   RESEND SIGNUP OTP
+   VERIFY OTP (SIGNUP & RESET)
 ====================================================== */
-// exports.resendOTP = async (req, res) => {
-//   try {
-//     const { userId } = req.body;
+exports.verifyOTP = async (req, res) => {
+  try {
+    const { userId, otp, flow } = req.body; // flow: 'signup' or 'reset'
+    if (!userId || !otp)
+      return res.status(400).json({ success: false, message: 'Missing data' });
 
-//     const user = await User.findById(userId);
-//     if (!user)
-//       return res.status(404).json({ success: false, message: 'User not found' });
+    const user = await User.findById(userId).select('+otp +otpExpiry +otpAttempts');
+    if (!user)
+      return res.status(404).json({ success: false, message: 'User not found' });
 
-//     if (user.isVerified)
-//       return res.status(400).json({
-//         success: false,
-//         message: 'User already verified. Please login.',
-//       });
+    if (user.otpExpiry < Date.now())
+      return res.status(400).json({ success: false, message: 'OTP expired' });
 
-//     if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN)
-//       return res.status(429).json({
-//         success: false,
-//         message: 'Please wait before requesting another OTP',
-//       });
+    if (user.otpAttempts >= MAX_ATTEMPTS)
+      return res.status(403).json({
+        success: false,
+        message: 'Too many attempts. Please resend OTP.',
+      });
 
-//     const otp = generateOTP();
-//     user.otp = await hashOTP(otp);
-//     user.otpExpiry = Date.now() + OTP_EXPIRY;
-//     user.otpAttempts = 0;
-//     user.otpResendCount += 1;
-//     user.otpLastSentAt = Date.now();
+    const isValid = await bcrypt.compare(otp, user.otp);
+    if (!isValid) {
+      user.otpAttempts += 1;
+      await user.save();
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
 
-//     await user.save();
+    user.otp = undefined;
+    user.otpExpiry = undefined;
+    user.otpAttempts = 0;
 
-//     await sendSMS({
-//       to: user.phone,
-//       message: otpMessage(otp, 'resend'),
-//     });
+    let resetPasswordToken = undefined;
+    if (flow === 'reset') {
+      const crypto = require('crypto');
+      resetPasswordToken = crypto.randomBytes(20).toString('hex');
+      user.resetPasswordToken = resetPasswordToken;
+      user.resetPasswordExpiry = Date.now() + 30 * 60 * 1000; // 30 mins
+    } else {
+      user.isVerified = true;
+      user.registrationStep = 'name_entry';
+    }
 
-//     res.json({ success: true, message: 'OTP resent successfully' });
-//   } catch (error) {
-//     res.status(500).json({ success: false, error: error.message });
-//   }
-// };
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Verification successful',
+      data: {
+        userId: user._id,
+        resetPasswordToken,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/* ======================================================
+   RESEND OTP
+====================================================== */
+exports.resendOTP = async (req, res) => {
+  try {
+    const { userId, flow } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user)
+      return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN)
+      return res.status(429).json({
+        success: false,
+        message: 'Please wait before requesting another OTP',
+      });
+
+    const otp = generateOTP();
+    user.otp = await hashOTP(otp);
+    user.otpPlain = otp; // Added for debugging
+    user.otpExpiry = Date.now() + OTP_EXPIRY;
+    user.otpAttempts = 0;
+    user.otpResendCount += 1;
+    user.otpLastSentAt = Date.now();
+
+    console.log(`[DEBUG] Resend OTP generated for user ${user._id}: ${otp}`);
+    await user.save();
+    console.log(`[DEBUG] User saved after resend OTP.`);
+
+    await sendSMS({
+      to: `${user.countryCode}${user.phone}`,
+      message: otpMessage(otp, flow || 'signup'),
+    });
+
+    res.json({
+      success: true,
+      message: 'OTP resent successfully',
+      data: {
+        otp: otp // Included for testing per user request. REMOVE IN PRODUCTION.
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
 
 /* ======================================================
    LOGIN
 ====================================================== */
 
+/* ======================================================
+   FINALIZE REGISTER (SET PASSWORD)
+====================================================== */
+exports.finalizeRegister = async (req, res) => {
+  try {
+    const { userId, password } = req.body;
+
+    if (!userId || !password) {
+      return res.status(400).json({ success: false, message: 'User ID and password are required' });
+    }
+
+    const user = await User.findById(userId).select('+password');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (!user.isVerified) {
+      return res.status(401).json({ success: false, message: 'Phone number not verified' });
+    }
+
+    user.password = password;
+    user.registrationStep = 'name_entry';
+    user.profileCompleted = false;
+
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Account finalized successfully',
+      data: {
+        token: generateToken(user._id),
+        user,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/* ======================================================
+   LOGIN (PASSWORD ONLY)
+====================================================== */
 exports.login = async (req, res) => {
   try {
     const { phone, password } = req.body;
@@ -218,20 +306,37 @@ exports.login = async (req, res) => {
     }
 
     let user;
-    // Try finding user with the provided phone number as IS
+    const digits = phone.replace(/\D/g, ''); // Extract only digits
+
+    console.log(`[DEBUG] Attempting login for normalized phone: ${digits}`);
+
+    // Try finding user with the provided phone number exact match
     user = await User.findOne({ phone }).select('+password');
 
-    // If not found and phone starts with +, try splitting it (for combined phone from frontend)
-    if (!user && phone.startsWith('+')) {
-      // Look for common country code lengths (2 to 4 chars)
-      const commonCodes = ['+91', '+1', '+44', '+971', '+61'];
+    // If not found, try searching by the digits only (if matches exactly)
+    if (!user) {
+      user = await User.findOne({ phone: digits }).select('+password');
+    }
+
+    // Comprehensive country code splitting logic
+    if (!user) {
+      const commonCodes = ['91', '1', '44', '971', '61'];
       for (const code of commonCodes) {
-        if (phone.startsWith(code)) {
-          const mobile = phone.slice(code.length);
-          user = await User.findOne({ phone: mobile, countryCode: code }).select('+password');
+        if (digits.startsWith(code) && digits.length > code.length) {
+          const mobile = digits.slice(code.length);
+          user = await User.findOne({
+            phone: mobile,
+            countryCode: `+${code}`
+          }).select('+password');
           if (user) break;
         }
       }
+    }
+
+    // Last resort: search for a user whose phone NUMBER is a suffix of the input
+    if (!user && digits.length >= 10) {
+      const last10 = digits.slice(-10);
+      user = await User.findOne({ phone: last10 }).select('+password');
     }
 
     if (!user) {
@@ -241,8 +346,18 @@ exports.login = async (req, res) => {
       });
     }
 
-    console.log(`Login attempt for phone: ${phone}`);
+    // DEBUG LOGS (Delete after fixing)
+    console.log(`[DEBUG] Login Attempt: ${phone}`);
+    console.log(`[DEBUG] User ID: ${user._id}`);
+    console.log(`[DEBUG] Has Password in DB: ${!!user.password}`);
+    if (user.password) {
+      console.log(`[DEBUG] Stored Password starts with: ${user.password.substring(0, 4)}`);
+      console.log(`[DEBUG] Stored Password length: ${user.password.length}`);
+    }
+
     const isMatch = user.password ? await user.matchPassword(password) : false;
+    console.log(`[DEBUG] Password Match Result: ${isMatch}`);
+
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -250,8 +365,8 @@ exports.login = async (req, res) => {
       });
     }
 
-    user.lastLogin = Date.now();
-    await user.save();
+    // Update last login without triggering save hooks on password
+    await User.findByIdAndUpdate(user._id, { $set: { lastLogin: Date.now() } });
 
     res.json({
       success: true,
@@ -513,7 +628,7 @@ exports.logout = async (req, res) => {
 
 
 /* ======================================================
-   FORGOT PASSWORD
+   FORGOT PASSWORD (STEP 1)
 ===================================================== */
 exports.forgotPassword = async (req, res) => {
   try {
@@ -523,7 +638,8 @@ exports.forgotPassword = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Phone number is required' });
     }
 
-    const user = await User.findOne({ phone, countryCode: countryCode || '+91' });
+    const fullCountryCode = countryCode || '+91';
+    const user = await User.findOne({ phone, countryCode: fullCountryCode });
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -531,18 +647,49 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    // Generate temporary reset token directly (SKIPPING OTP as requested)
-    const crypto = require('crypto');
-    const resetToken = crypto.randomBytes(20).toString('hex');
-    user.resetPasswordToken = resetToken;
-    user.resetPasswordExpiry = Date.now() + 30 * 60 * 1000; // 30 mins
+    // Security: Cooldown check
+    if (user.otpLastSentAt && Date.now() - user.otpLastSentAt < OTP_COOLDOWN) {
+      return res.status(429).json({
+        success: false,
+        message: 'Please wait before requesting another OTP',
+      });
+    }
 
+    const otp = generateOTP();
+    user.otp = await hashOTP(otp);
+    user.otpPlain = otp; // Added for debugging
+    user.otpExpiry = Date.now() + OTP_EXPIRY;
+    user.otpAttempts = 0;
+    user.otpLastSentAt = Date.now();
+
+    console.log(`[DEBUG] Forgot Password OTP generated for user ${user._id}: ${otp}`);
     await user.save();
+    console.log(`[DEBUG] User saved after forgot password.`);
+
+    // Send SMS
+    try {
+      await sendSMS({
+        to: `${fullCountryCode}${phone}`,
+        message: otpMessage(otp, 'reset'),
+      });
+    } catch (smsError) {
+      console.error('SMS Send Error:', smsError);
+      if (process.env.NODE_ENV === 'development') {
+        return res.json({
+          success: true,
+          message: 'OTP generated (Dev Mode)',
+          data: { userId: user._id, otp }
+        });
+      }
+    }
 
     res.json({
       success: true,
-      message: 'User verified. Please reset your password.',
-      data: { resetPasswordToken: resetToken },
+      message: 'Verification code sent to your phone',
+      data: {
+        userId: user._id,
+        otp: otp // Included for testing per user request. REMOVE IN PRODUCTION.
+      },
     });
   } catch (error) {
     console.error('Forgot Password Error:', error);
@@ -564,7 +711,7 @@ exports.resetPassword = async (req, res) => {
     const user = await User.findOne({
       resetPasswordToken,
       resetPasswordExpiry: { $gt: Date.now() },
-    });
+    }).select('+password');
 
     if (!user) {
       return res.status(400).json({ success: false, message: 'Invalid or expired reset token' });

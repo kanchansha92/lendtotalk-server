@@ -34,7 +34,7 @@ const UserSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      select: false, // Don't return password by default
+      // select: false, // Temporarily commented out to debug why it's not saving
     },
 
     // Profile Information
@@ -428,9 +428,11 @@ UserSchema.methods.updateLastActive = async function () {
 
 // Password hashing pre-save hook
 UserSchema.pre('save', async function () {
+  console.log(`[DEBUG] Pre-save hook for user ${this._id}. Password modified: ${this.isModified('password')}`);
   if (!this.isModified('password')) return;
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
+  console.log(`[DEBUG] Password hashed. New length: ${this.password.length}`);
 });
 
 // Method to compare password
